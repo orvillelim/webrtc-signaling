@@ -1,19 +1,12 @@
-import WebSocket, { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws';
 import { v4 as uuidv4 } from 'uuid'
-
-export default class Signaling {
-
-}
 
 const wss = new WebSocketServer({ port: 8080 })
 
 let rooms = {}
 
 wss.on('connection', ws => {
-
-  const uuid = uuidv4()
-
-  ws.uuid = uuid
+  ws.uuid = uuidv4()
 
   ws.on('message', data => {
 
@@ -58,76 +51,77 @@ const saveUser = (data, websocket) => {
   let room = rooms?.[data.roomId]
 
   if (room) {
-    const participants = room.participants
-    for (const participant of participants) {
-      const to = participant.websocket
-      const request = {
-        type: 'join',
-        data
-      }
-      send(to, request)
+    if (!room.participants.caller) {
+      room.participants.caller = { websocket, id: websocket.uuid }
     }
-    room.participants.push({ websocket, id: websocket.uuid })
+    else {
+      room.participants.callee = { websocket,  id: websocket.uuid  }
+    }
+
+    const {caller, callee} = room.participants
+    if (!callee) return ;
+    send(caller.websocket, {
+      type: 'join',
+      data
+    })
     return
   }
 
   // create new room
-  rooms[data.roomId] = { 'name': data.name, 'id': data.roomId, 'participants': [{ websocket, id: websocket.uuid }] }
+  rooms[data.roomId] = { 'name': data.name, 'id': data.roomId, 'participants': { caller: { websocket,  id: websocket.uuid  }} }
   console.log('created new room')
 
 }
 
 const sendCandidate = (data, websocket) => {
-  console.log('sendCandidate')
 
   let room = rooms?.[data.roomId]
-  const participants = room.participants.filter(participant => participant.id != websocket.uuid)
-  const to = participants[0].websocket
+  const { participants } = room
+  const to = [participants.caller, participants.callee].filter( participant => participant && participant?.id !== websocket.uuid)[0]
+
+  if (!to) return;
   const request = {
     type: 'candidate',
     candidate: data.candidate
   }
 
-  send(to, request)
+  send(to.websocket, request)
 }
 
 
-const offer = (data, websocket) => {
-
+const offer = (data) => {
   let room = rooms?.[data.roomId]
-  const participants = room.participants.filter(participant => participant.id != websocket.uuid)
-  const to = participants[0].websocket
-
   const request = {
     type: 'offer',
     offer: data.offer
   }
-  send(to, request)
+  send(room.participants.callee.websocket, request)
 }
 
-const answer = (data, websocket) => {
+const answer = (data) => {
 
   let room = rooms?.[data.roomId]
-  const participants = room.participants.filter(participant => participant.id != websocket.uuid)
-  console.log('answer', participants)
-  const to = participants[0].websocket
 
   const request = {
     type: 'answer',
     answer: data.answer
   }
   // send to 
-  send(to, request)
+  send(room.participants.caller.websocket, request)
 }
 
 const close = (data, websocket) => {
 
-  console.log('close')
-
   let room = rooms?.[data.roomId]
-  const participants = room.participants.filter(participant => participant.id != websocket.uuid)
-  room.participants = participants
-  rooms[data.roomId].participants = participants
+  if (!room) return;
+  const { caller } = room.participants
+
+  if (websocket.uuid === caller.id) {
+    delete rooms[data.roomId].participants.caller
+  } else {
+    delete rooms[data.roomId].participants.callee
+  }
+  console.log('close', rooms.participants)
 
 }
 
